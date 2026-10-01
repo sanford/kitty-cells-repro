@@ -50,3 +50,10 @@ To try it:
 
 With either patch, the picture shows in iTerm2 3.7.3 and still shows in Kitty
 and Ghostty.
+
+## Screenshots
+
+- iTerm2, `raw`: A blank, B and C drawn: `screenshots/iterm2-raw-A-blank-B-C-drawn.png`
+- iTerm2, ratatui-image 11.1.0: `screenshots/iterm2-ratatui-image-11.1-blank.png`
+- iTerm2, ratatui-image main with the patch: `screenshots/iterm2-ratatui-image-main-patched.png`
+- Ghostty (Retina), `raw`: A at half size: `screenshots/ghostty-raw-A-half-size.png`
