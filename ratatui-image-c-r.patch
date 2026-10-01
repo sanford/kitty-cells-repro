@@ -1,0 +1,109 @@
+diff --git a/src/protocol/kitty.rs b/src/protocol/kitty.rs
+index 5de2722..98aa3ae 100644
+--- a/src/protocol/kitty.rs
++++ b/src/protocol/kitty.rs
+@@ -30,8 +30,8 @@ struct KittyProtoState {
+ }
+ 
+ impl KittyProtoState {
+-    fn new(img: &DynamicImage, id: u32, is_tmux: bool, compress: bool) -> Self {
+-        let transmit_str = transmit_virtual(img, id, is_tmux, compress);
++    fn new(img: &DynamicImage, size: Size, id: u32, is_tmux: bool, compress: bool) -> Self {
++        let transmit_str = transmit_virtual(img, size, id, is_tmux, compress);
+         let [id_extra, id_r, id_g, id_b] = id.to_be_bytes();
+         Self {
+             transmitted: Arc::new(AtomicBool::new(false)),
+@@ -66,7 +66,7 @@ impl Kitty {
+         is_tmux: bool,
+         compress: bool,
+     ) -> Result<Self> {
+-        let proto_state = KittyProtoState::new(&image, id, is_tmux, compress);
++        let proto_state = KittyProtoState::new(&image, size, id, is_tmux, compress);
+         Ok(Self { proto_state, size })
+     }
+ 
+@@ -138,7 +138,7 @@ impl StatefulProtocolTrait for StatefulKitty {
+     fn resize_encode(&mut self, img: DynamicImage, size: Size) -> Result<()> {
+         self.size = size;
+         // If resized then we must transmit again.
+-        self.proto_state = KittyProtoState::new(&img, self.id.0, self.is_tmux, self.compress);
++        self.proto_state = KittyProtoState::new(&img, size, self.id.0, self.is_tmux, self.compress);
+         Ok(())
+     }
+ }
+@@ -212,6 +212,11 @@ fn zlib(raw: &[u8]) -> Vec<u8> {
+ /// Removing the placements when the unicode placeholder is no longer there is being handled
+ /// automatically by kitty.
+ ///
++/// The placement's size in cells (`c`/`r`) is given rather than left for the terminal to
++/// work out from the pixel size: iTerm2 draws nothing without it, and a terminal whose cell
++/// size differs from the one the image was scaled for would otherwise draw it at the wrong
++/// size.
++///
+ /// With `compress`, the payload is deflated and the transmission says `o=z`.
+ /// That is the payload's ENCODING and nothing else: compression happens before
+ /// base64, `f=32` still names the format the terminal finds after inflating, and
+@@ -223,7 +228,14 @@ fn zlib(raw: &[u8]) -> Vec<u8> {
+ /// `compress` must only be set when the terminal answered the `o=z` capability
+ /// probe: a terminal that cannot inflate refuses the transmission outright, and
+ /// every placement naming the image then draws nothing at all.
+-fn transmit_virtual(img: &DynamicImage, id: u32, is_tmux: bool, compress: bool) -> String {
++fn transmit_virtual(
++    img: &DynamicImage,
++    size: Size,
++    id: u32,
++    is_tmux: bool,
++    compress: bool,
++) -> String {
++    let (cols, rows) = (size.width, size.height);
+     let (w, h) = (img.width(), img.height());
+     let img_rgba8 = img.to_rgba8();
+     let raw = img_rgba8.as_raw();
+@@ -259,7 +271,11 @@ fn transmit_virtual(img: &DynamicImage, id: u32, is_tmux: bool, compress: bool)
+         write!(data, "{escape}_Gq=2,").unwrap();
+ 
+         if i == 0 {
+-            write!(data, "i={id},a=T,U=1,f=32,{compression}t=d,s={w},v={h},").unwrap();
++            write!(
++                data,
++                "i={id},a=T,U=1,f=32,{compression}t=d,s={w},v={h},c={cols},r={rows},"
++            )
++            .unwrap();
+         }
+ 
+         // m=0 means over
+@@ -763,10 +779,24 @@ mod tests {
+         (params, bytes)
+     }
+ 
++    /// The size in cells is given, not left to the terminal to infer from the
++    /// pixel size: iTerm2 draws nothing without it.
++    #[test]
++    fn transmit_gives_the_size_in_cells() {
++        let (params, _) = reassemble(&transmit_virtual(
++            &canvas(),
++            Size::new(8, 2),
++            7,
++            false,
++            false,
++        ));
++        assert!(params.contains("c=8,r=2"), "{params}");
++    }
++
+     #[test]
+     fn transmit_without_compression_is_the_raw_image() {
+         let img = canvas();
+-        let (params, bytes) = reassemble(&transmit_virtual(&img, 7, false, false));
++        let (params, bytes) = reassemble(&transmit_virtual(&img, Size::new(8, 2), 7, false, false));
+         assert!(
+             !params.contains("o=z"),
+             "nothing claims to be compressed: {params}"
+@@ -786,7 +816,7 @@ mod tests {
+     #[test]
+     fn transmit_with_compression_inflates_back_to_the_raw_image() {
+         let img = canvas();
+-        let (params, bytes) = reassemble(&transmit_virtual(&img, 7, false, true));
++        let (params, bytes) = reassemble(&transmit_virtual(&img, Size::new(8, 2), 7, false, true));
+         assert!(
+             params.contains("o=z"),
+             "the payload is compressed and says so: {params}"
