@@ -79,9 +79,11 @@ fn transmit(out: &mut impl Write, id: u32, params: &str, data: &str) {
     let chunks: Vec<&[u8]> = data.as_bytes().chunks(4096).collect();
     for (i, chunk) in chunks.iter().enumerate() {
         let more = u8::from(i + 1 < chunks.len());
-        write!(out, "\x1b_G").unwrap();
+        // q=2 on every chunk, as ratatui-image does: iTerm2 answers the last
+        // chunk otherwise.
+        write!(out, "\x1b_Gq=2,").unwrap();
         if i == 0 {
-            write!(out, "a=T,U=1,i={id},q=2,{params},").unwrap();
+            write!(out, "a=T,U=1,i={id},{params},").unwrap();
         }
         write!(
             out,

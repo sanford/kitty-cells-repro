@@ -33,13 +33,20 @@ the cells the placeholders cover.
 
 ## With the fix
 
-`ratatui-image-c-r.patch` (against 11.1.0) passes the `Size` that
-`Kitty::new` / `StatefulKitty::resize_encode` already have through to
-`transmit_virtual`, and adds `c={cols},r={rows}`. To try it:
+Two patches, the same change: pass the `Size` that `Kitty::new` /
+`StatefulKitty::resize_encode` already have through to the transmit, and add
+`c={cols},r={rows}`.
+
+- `ratatui-image-main-c-r.patch`: against `main` (v12.0.0-rc.0), covering both the
+  base64 (`t=d`) and shared-memory (`t=s`) paths
+- `ratatui-image-11.1.0-c-r.patch`: against v11.1.0, which this crate depends on
+
+To try it:
 
     git clone https://github.com/ratatui/ratatui-image && cd ratatui-image
-    git checkout v11.1.0 && git apply ../kitty-cells-repro/ratatui-image-c-r.patch
+    git checkout v11.1.0 && git apply ../kitty-cells-repro/ratatui-image-11.1.0-c-r.patch
     cd ../kitty-cells-repro
     cargo run --config 'patch.crates-io.ratatui-image.path="../ratatui-image"'
 
-The picture then shows in iTerm2, and still shows in Kitty and Ghostty.
+With either patch, the picture shows in iTerm2 3.7.3 and still shows in Kitty
+and Ghostty.

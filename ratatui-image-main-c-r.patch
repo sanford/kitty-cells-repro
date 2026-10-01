@@ -1,0 +1,249 @@
+From 5b265ce676f8d1bd57529d48be7da76e157a0523 Mon Sep 17 00:00:00 2001
+From: Sanford Lincoln <github@heysanford.com>
+Date: Thu, 1 Oct 2026 06:32:56 -0400
+Subject: [PATCH] fix(kitty): give the placement's size in cells (c/r)
+
+iTerm2 draws Kitty unicode-placeholder images only when the virtual
+placement says how many cells it spans. Without c/r it draws nothing,
+and since iTerm2 answers the Kitty query, the picker chooses Kitty there
+by default. Kitty and Ghostty infer the size from the pixel size, which
+goes wrong whenever that doesn't match their cell size exactly.
+
+Both transmit paths (base64 and shared memory) now send c/r from the
+Size that Kitty::new and StatefulKitty::resize_encode already have.
+
+Refs #158
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/protocol/kitty.rs | 111 ++++++++++++++++++++++++++++++++----------
+ 1 file changed, 85 insertions(+), 26 deletions(-)
+
+diff --git a/src/protocol/kitty.rs b/src/protocol/kitty.rs
+index ceed158..9bb9996 100644
+--- a/src/protocol/kitty.rs
++++ b/src/protocol/kitty.rs
+@@ -20,7 +20,7 @@ use rustix::{
+ 
+ use crate::protocol::UNIT_WIDTH;
+ use crate::{Result, picker::cap_parser::Parser};
+-use image::DynamicImage;
++use image::{DynamicImage, RgbaImage};
+ use ratatui::layout::Size;
+ use ratatui::style::Color;
+ use ratatui::{buffer::Buffer, layout::Rect};
+@@ -38,20 +38,19 @@ struct KittyProtoState {
+ }
+ 
+ impl KittyProtoState {
+-    fn new(img: &DynamicImage, id: u32, is_tmux: bool, compress: bool, smo: bool) -> Result<Self> {
++    fn new(
++        img: &DynamicImage,
++        size: Size,
++        id: u32,
++        is_tmux: bool,
++        compress: bool,
++        smo: bool,
++    ) -> Result<Self> {
+         // The only caller that holds a `DynamicImage`: every transmit path below
+         // takes raw RGBA bytes plus dimensions, so the conversion happens once,
+         // here, rather than once per path.
+         let img_rgba8 = img.to_rgba8();
+-        let transmit_str = transmit_or_shm(
+-            img_rgba8.as_raw(),
+-            img.width(),
+-            img.height(),
+-            id,
+-            is_tmux,
+-            compress,
+-            smo,
+-        )?;
++        let transmit_str = transmit_or_shm(&img_rgba8, size, id, is_tmux, compress, smo)?;
+         let [id_extra, id_r, id_g, id_b] = id.to_be_bytes();
+         Ok(Self {
+             transmitted: Arc::new(AtomicBool::new(false)),
+@@ -87,7 +86,7 @@ impl Kitty {
+         compress: bool,
+         smo: bool,
+     ) -> Result<Self> {
+-        let proto_state = KittyProtoState::new(&image, id, is_tmux, compress, smo)?;
++        let proto_state = KittyProtoState::new(&image, size, id, is_tmux, compress, smo)?;
+         Ok(Self { proto_state, size })
+     }
+ 
+@@ -162,7 +161,7 @@ impl StatefulProtocolTrait for StatefulKitty {
+         self.size = size;
+         // If resized then we must transmit again.
+         self.proto_state =
+-            KittyProtoState::new(&img, self.id.0, self.is_tmux, self.compress, self.smo)?;
++            KittyProtoState::new(&img, size, self.id.0, self.is_tmux, self.compress, self.smo)?;
+         Ok(())
+     }
+ }
+@@ -231,19 +230,19 @@ fn zlib(raw: &[u8]) -> Vec<u8> {
+ 
+ #[cfg_attr(windows, allow(unused_variables))]
+ fn transmit_or_shm(
+-    bytes: &[u8],
+-    w: u32,
+-    h: u32,
++    img: &RgbaImage,
++    size: Size,
+     id: u32,
+     is_tmux: bool,
+     compress: bool,
+     smo: bool,
+ ) -> Result<String> {
++    let (bytes, w, h) = (img.as_raw(), img.width(), img.height());
+     #[cfg(not(windows))]
+     if smo {
+-        return transmit_shm(bytes, w, h, id, is_tmux);
++        return transmit_shm(bytes, w, h, size, id, is_tmux);
+     }
+-    Ok(transmit_base64(bytes, w, h, id, is_tmux, compress))
++    Ok(transmit_base64(bytes, w, h, size, id, is_tmux, compress))
+ }
+ 
+ /// Create a shared memory object.
+@@ -360,7 +359,14 @@ pub(crate) fn generate_shm_name() -> String {
+ /// the same way an untransmitted base64 image is left marked transmitted but never
+ /// shown.
+ #[cfg(not(windows))]
+-fn transmit_shm(bytes: &[u8], w: u32, h: u32, id: u32, is_tmux: bool) -> Result<String> {
++fn transmit_shm(
++    bytes: &[u8],
++    w: u32,
++    h: u32,
++    size: Size,
++    id: u32,
++    is_tmux: bool,
++) -> Result<String> {
+     let shm_name = generate_shm_name();
+     shm_write(&shm_name, bytes)?;
+ 
+@@ -372,7 +378,8 @@ fn transmit_shm(bytes: &[u8], w: u32, h: u32, id: u32, is_tmux: bool) -> Result<
+     data.push_str(start);
+     write!(
+         data,
+-        "{escape}_Gq=2,i={id},a=T,U=1,f=32,t=s,s={w},v={h},m=0;"
++        "{escape}_Gq=2,i={id},a=T,U=1,f=32,t=s,s={w},v={h},c={},r={},m=0;",
++        size.width, size.height
+     )
+     .unwrap();
+     base64_simd::STANDARD.encode_append(shm_name.as_bytes(), &mut data);
+@@ -389,6 +396,10 @@ fn transmit_shm(bytes: &[u8], w: u32, h: u32, id: u32, is_tmux: bool) -> Result<
+ /// Removing the placements when the unicode placeholder is no longer there is being handled
+ /// automatically by kitty.
+ ///
++/// The placement's size in cells (`c`/`r`) is given rather than left for the terminal to work
++/// out from the pixel size: iTerm2 draws nothing without it, and a terminal whose cell size
++/// differs from the one the image was scaled for would draw it at the wrong size.
++///
+ /// With `compress`, the payload is deflated and the transmission says `o=z`.
+ /// That is the payload's ENCODING and nothing else: compression happens before
+ /// base64, `f=32` still names the format the terminal finds after inflating, and
+@@ -400,7 +411,15 @@ fn transmit_shm(bytes: &[u8], w: u32, h: u32, id: u32, is_tmux: bool) -> Result<
+ /// `compress` must only be set when the terminal answered the `o=z` capability
+ /// probe: a terminal that cannot inflate refuses the transmission outright, and
+ /// every placement naming the image then draws nothing at all.
+-fn transmit_base64(bytes: &[u8], w: u32, h: u32, id: u32, is_tmux: bool, compress: bool) -> String {
++fn transmit_base64(
++    bytes: &[u8],
++    w: u32,
++    h: u32,
++    size: Size,
++    id: u32,
++    is_tmux: bool,
++    compress: bool,
++) -> String {
+     let bytes: Cow<[u8]> = if compress {
+         Cow::Owned(zlib(bytes))
+     } else {
+@@ -433,7 +452,12 @@ fn transmit_base64(bytes: &[u8], w: u32, h: u32, id: u32, is_tmux: bool, compres
+         write!(data, "{escape}_Gq=2,").unwrap();
+ 
+         if i == 0 {
+-            write!(data, "i={id},a=T,U=1,f=32,{compression}t=d,s={w},v={h},").unwrap();
++            write!(
++                data,
++                "i={id},a=T,U=1,f=32,{compression}t=d,s={w},v={h},c={},r={},",
++                size.width, size.height
++            )
++            .unwrap();
+         }
+ 
+         // m=0 means over
+@@ -937,6 +961,25 @@ mod tests {
+         (params, bytes)
+     }
+ 
++    /// The size in cells is given, not left to the terminal to infer from the
++    /// pixel size: iTerm2 draws nothing without it.
++    #[test]
++    fn transmit_gives_the_size_in_cells() {
++        let img = canvas();
++        let raw = img.to_rgba8();
++        let seq = transmit_base64(
++            raw.as_raw(),
++            img.width(),
++            img.height(),
++            Size::new(8, 2),
++            7,
++            false,
++            false,
++        );
++        let (params, _) = reassemble(&seq);
++        assert!(params.contains("c=8,r=2"), "{params}");
++    }
++
+     #[test]
+     fn transmit_without_compression_is_the_raw_image() {
+         let img = canvas();
+@@ -945,6 +988,7 @@ mod tests {
+             raw.as_raw(),
+             img.width(),
+             img.height(),
++            Size::new(8, 2),
+             7,
+             false,
+             false,
+@@ -973,6 +1017,7 @@ mod tests {
+             raw.as_raw(),
+             img.width(),
+             img.height(),
++            Size::new(8, 2),
+             7,
+             false,
+             true,
+@@ -1016,10 +1061,24 @@ mod tests {
+     fn consecutive_shm_transmits_of_the_same_id_use_different_objects() {
+         let img = canvas();
+         let raw = img.to_rgba8();
+-        let first = super::transmit_shm(raw.as_raw(), img.width(), img.height(), 7, false)
+-            .expect("this platform writes shared memory");
+-        let second = super::transmit_shm(raw.as_raw(), img.width(), img.height(), 7, false)
+-            .expect("this platform writes shared memory");
++        let first = super::transmit_shm(
++            raw.as_raw(),
++            img.width(),
++            img.height(),
++            Size::new(8, 2),
++            7,
++            false,
++        )
++        .expect("this platform writes shared memory");
++        let second = super::transmit_shm(
++            raw.as_raw(),
++            img.width(),
++            img.height(),
++            Size::new(8, 2),
++            7,
++            false,
++        )
++        .expect("this platform writes shared memory");
+ 
+         let name_of = |seq: &str| {
+             let start = seq.find(";").expect("payload starts after the header") + 1;
+-- 
+2.54.0 (Apple Git-157)
+
