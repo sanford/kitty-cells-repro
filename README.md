@@ -37,7 +37,7 @@ Two patches, the same change: pass the `Size` that `Kitty::new` /
 `StatefulKitty::resize_encode` already have through to the transmit, and add
 `c={cols},r={rows}`.
 
-- `ratatui-image-main-c-r.patch`: against `main` (v12.0.0-rc.0), covering both the
+- `ratatui-image-master-c-r.patch`: against `master` (v12.0.0-rc.0), covering both the
   base64 (`t=d`) and shared-memory (`t=s`) paths
 - `ratatui-image-11.1.0-c-r.patch`: against v11.1.0, which this crate depends on
 
@@ -55,5 +55,5 @@ and Ghostty.
 
 - iTerm2, `raw`: A blank, B and C drawn: `screenshots/iterm2-raw-A-blank-B-C-drawn.png`
 - iTerm2, ratatui-image 11.1.0: `screenshots/iterm2-ratatui-image-11.1-blank.png`
-- iTerm2, ratatui-image main with the patch: `screenshots/iterm2-ratatui-image-main-patched.png`
+- iTerm2, ratatui-image master with the patch: `screenshots/iterm2-ratatui-image-main-patched.png`
 - Ghostty (Retina), `raw`: A at half size: `screenshots/ghostty-raw-A-half-size.png`
